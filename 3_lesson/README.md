@@ -567,5 +567,5 @@ Another one is to use learning rate decay:
 
 
 ```python
-### Try work on it later!!!!
+### Try working on it later!!!!
 ```
