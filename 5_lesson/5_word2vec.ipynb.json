@@ -1,0 +1,1345 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "D7tqLMoKF6uq"
+   },
+   "source": [
+    "Deep Learning\n",
+    "=============\n",
+    "\n",
+    "Assignment 5\n",
+    "------------\n",
+    "\n",
+    "The goal of this assignment is to train a Word2Vec skip-gram model over [Text8](http://mattmahoney.net/dc/textdata) data."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 60,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     }
+    },
+    "colab_type": "code",
+    "collapsed": true,
+    "id": "0K1ZyLn04QZf"
+   },
+   "outputs": [],
+   "source": [
+    "# These are all the modules we'll be using later. Make sure you can import them\n",
+    "# before proceeding further.\n",
+    "from __future__ import print_function\n",
+    "import collections\n",
+    "import math\n",
+    "import numpy as np\n",
+    "import os\n",
+    "import random\n",
+    "import tensorflow as tf\n",
+    "import zipfile\n",
+    "from matplotlib import pylab\n",
+    "from six.moves import range\n",
+    "from six.moves.urllib.request import urlretrieve\n",
+    "from sklearn.manifold import TSNE"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "aCjPJE944bkV"
+   },
+   "source": [
+    "Download the data from the source website if necessary."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 61,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     },
+     "output_extras": [
+      {
+       "item_id": 1
+      }
+     ]
+    },
+    "colab_type": "code",
+    "collapsed": false,
+    "executionInfo": {
+     "elapsed": 14640,
+     "status": "ok",
+     "timestamp": 1445964482948,
+     "user": {
+      "color": "#1FA15D",
+      "displayName": "Vincent Vanhoucke",
+      "isAnonymous": false,
+      "isMe": true,
+      "permissionId": "05076109866853157986",
+      "photoUrl": "//lh6.googleusercontent.com/-cCJa7dTDcgQ/AAAAAAAAAAI/AAAAAAAACgw/r2EZ_8oYer4/s50-c-k-no/photo.jpg",
+      "sessionId": "2f1ffade4c9f20de",
+      "userId": "102167687554210253930"
+     },
+     "user_tz": 420
+    },
+    "id": "RJ-o3UBUFtCw",
+    "outputId": "c4ec222c-80b5-4298-e635-93ca9f79c3b7"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Found and verified text8.zip\n"
+     ]
+    }
+   ],
+   "source": [
+    "url = 'http://mattmahoney.net/dc/'\n",
+    "\n",
+    "def maybe_download(filename, expected_bytes):\n",
+    "  \"\"\"Download a file if not present, and make sure it's the right size.\"\"\"\n",
+    "  if not os.path.exists(filename):\n",
+    "    filename, _ = urlretrieve(url + filename, filename)\n",
+    "  statinfo = os.stat(filename)\n",
+    "  if statinfo.st_size == expected_bytes:\n",
+    "    print('Found and verified %s' % filename)\n",
+    "  else:\n",
+    "    print(statinfo.st_size)\n",
+    "    raise Exception(\n",
+    "      'Failed to verify ' + filename + '. Can you get to it with a browser?')\n",
+    "  return filename\n",
+    "\n",
+    "filename = maybe_download('text8.zip', 31344016)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "Zqz3XiqI4mZT"
+   },
+   "source": [
+    "Read the data into a string."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 62,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     },
+     "output_extras": [
+      {
+       "item_id": 1
+      }
+     ]
+    },
+    "colab_type": "code",
+    "collapsed": false,
+    "executionInfo": {
+     "elapsed": 28844,
+     "status": "ok",
+     "timestamp": 1445964497165,
+     "user": {
+      "color": "#1FA15D",
+      "displayName": "Vincent Vanhoucke",
+      "isAnonymous": false,
+      "isMe": true,
+      "permissionId": "05076109866853157986",
+      "photoUrl": "//lh6.googleusercontent.com/-cCJa7dTDcgQ/AAAAAAAAAAI/AAAAAAAACgw/r2EZ_8oYer4/s50-c-k-no/photo.jpg",
+      "sessionId": "2f1ffade4c9f20de",
+      "userId": "102167687554210253930"
+     },
+     "user_tz": 420
+    },
+    "id": "Mvf09fjugFU_",
+    "outputId": "e3a928b4-1645-4fe8-be17-fcf47de5716d"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Data size 17005207\n"
+     ]
+    }
+   ],
+   "source": [
+    "def read_data(filename):\n",
+    "  \"\"\"Extract the first file enclosed in a zip file as a list of words\"\"\"\n",
+    "  with zipfile.ZipFile(filename) as f:\n",
+    "    data = tf.compat.as_str(f.read(f.namelist()[0])).split()\n",
+    "  return data\n",
+    "  \n",
+    "words = read_data(filename)\n",
+    "print('Data size %d' % len(words))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "Zdw6i4F8glpp"
+   },
+   "source": [
+    "Build the dictionary and replace rare words with UNK token."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 63,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     },
+     "output_extras": [
+      {
+       "item_id": 1
+      }
+     ]
+    },
+    "colab_type": "code",
+    "collapsed": false,
+    "executionInfo": {
+     "elapsed": 28849,
+     "status": "ok",
+     "timestamp": 1445964497178,
+     "user": {
+      "color": "#1FA15D",
+      "displayName": "Vincent Vanhoucke",
+      "isAnonymous": false,
+      "isMe": true,
+      "permissionId": "05076109866853157986",
+      "photoUrl": "//lh6.googleusercontent.com/-cCJa7dTDcgQ/AAAAAAAAAAI/AAAAAAAACgw/r2EZ_8oYer4/s50-c-k-no/photo.jpg",
+      "sessionId": "2f1ffade4c9f20de",
+      "userId": "102167687554210253930"
+     },
+     "user_tz": 420
+    },
+    "id": "gAL1EECXeZsD",
+    "outputId": "3fb4ecd1-df67-44b6-a2dc-2291730970b2"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Most common words (+UNK) [['UNK', 418391], ('the', 1061396), ('of', 593677), ('and', 416629), ('one', 411764)]\n",
+      "Sample data [5239, 3084, 12, 6, 195, 2, 3137, 46, 59, 156]\n"
+     ]
+    }
+   ],
+   "source": [
+    "vocabulary_size = 50000\n",
+    "\n",
+    "def build_dataset(words):\n",
+    "  count = [['UNK', -1]]\n",
+    "  count.extend(collections.Counter(words).most_common(vocabulary_size - 1))\n",
+    "  dictionary = dict()\n",
+    "  for word, _ in count:\n",
+    "    dictionary[word] = len(dictionary)\n",
+    "  data = list()\n",
+    "  unk_count = 0\n",
+    "  for word in words:\n",
+    "    if word in dictionary:\n",
+    "      index = dictionary[word]\n",
+    "    else:\n",
+    "      index = 0  # dictionary['UNK']\n",
+    "      unk_count = unk_count + 1\n",
+    "    data.append(index)\n",
+    "  count[0][1] = unk_count\n",
+    "  reverse_dictionary = dict(zip(dictionary.values(), dictionary.keys())) \n",
+    "  return data, count, dictionary, reverse_dictionary\n",
+    "\n",
+    "data, count, dictionary, reverse_dictionary = build_dataset(words)\n",
+    "print('Most common words (+UNK)', count[:5])\n",
+    "print('Sample data', data[:10])\n",
+    "del words  # Hint to reduce memory."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "lFwoyygOmWsL"
+   },
+   "source": [
+    "Function to generate a training batch for the skip-gram model."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 64,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     },
+     "output_extras": [
+      {
+       "item_id": 1
+      }
+     ]
+    },
+    "colab_type": "code",
+    "collapsed": false,
+    "executionInfo": {
+     "elapsed": 113,
+     "status": "ok",
+     "timestamp": 1445964901989,
+     "user": {
+      "color": "#1FA15D",
+      "displayName": "Vincent Vanhoucke",
+      "isAnonymous": false,
+      "isMe": true,
+      "permissionId": "05076109866853157986",
+      "photoUrl": "//lh6.googleusercontent.com/-cCJa7dTDcgQ/AAAAAAAAAAI/AAAAAAAACgw/r2EZ_8oYer4/s50-c-k-no/photo.jpg",
+      "sessionId": "2f1ffade4c9f20de",
+      "userId": "102167687554210253930"
+     },
+     "user_tz": 420
+    },
+    "id": "w9APjA-zmfjV",
+    "outputId": "67cccb02-cdaf-4e47-d489-43bcc8d57bb8"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "data: ['anarchism', 'originated', 'as', 'a', 'term', 'of', 'abuse', 'first']\n",
+      "(8,)\n",
+      "(8, 1)\n",
+      "\n",
+      "with num_skips = 2 and skip_window = 1:\n",
+      "    batch: ['originated', 'originated', 'as', 'as', 'a', 'a', 'term', 'term']\n",
+      "    labels: ['as', 'anarchism', 'originated', 'a', 'term', 'as', 'a', 'of']\n",
+      "(8,)\n",
+      "(8, 1)\n",
+      "\n",
+      "with num_skips = 4 and skip_window = 2:\n",
+      "    batch: ['as', 'as', 'as', 'as', 'a', 'a', 'a', 'a']\n",
+      "    labels: ['originated', 'term', 'anarchism', 'a', 'as', 'term', 'of', 'originated']\n"
+     ]
+    }
+   ],
+   "source": [
+    "data_index = 0\n",
+    "\n",
+    "def generate_batch(batch_size, num_skips, skip_window):\n",
+    "  global data_index\n",
+    "  assert batch_size % num_skips == 0\n",
+    "  assert num_skips <= 2 * skip_window\n",
+    "  batch = np.ndarray(shape=(batch_size), dtype=np.int32)\n",
+    "  labels = np.ndarray(shape=(batch_size, 1), dtype=np.int32)\n",
+    "  span = 2 * skip_window + 1 # [ skip_window target skip_window ]\n",
+    "  buffer = collections.deque(maxlen=span)\n",
+    "  for _ in range(span):\n",
+    "    buffer.append(data[data_index])\n",
+    "    data_index = (data_index + 1) % len(data)\n",
+    "  for i in range(batch_size // num_skips):\n",
+    "    target = skip_window  # target label at the center of the buffer\n",
+    "    targets_to_avoid = [ skip_window ]\n",
+    "    for j in range(num_skips):\n",
+    "      while target in targets_to_avoid:\n",
+    "        target = random.randint(0, span - 1)\n",
+    "      targets_to_avoid.append(target)\n",
+    "      batch[i * num_skips + j] = buffer[skip_window]\n",
+    "      labels[i * num_skips + j, 0] = buffer[target]\n",
+    "    buffer.append(data[data_index])\n",
+    "    data_index = (data_index + 1) % len(data)\n",
+    "  return batch, labels\n",
+    "\n",
+    "print('data:', [reverse_dictionary[di] for di in data[:8]])\n",
+    "\n",
+    "for num_skips, skip_window in [(2, 1), (4, 2)]:\n",
+    "    data_index = 0\n",
+    "    batch, labels = generate_batch(batch_size=8, num_skips=num_skips, skip_window=skip_window)\n",
+    "    print(np.shape(batch))\n",
+    "    print(np.shape(labels))\n",
+    "    print('\\nwith num_skips = %d and skip_window = %d:' % (num_skips, skip_window))\n",
+    "    print('    batch:', [reverse_dictionary[bi] for bi in batch])\n",
+    "    print('    labels:', [reverse_dictionary[li] for li in labels.reshape(8)])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "Ofd1MbBuwiva"
+   },
+   "source": [
+    "Train a skip-gram model."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 65,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     }
+    },
+    "colab_type": "code",
+    "collapsed": true,
+    "id": "8pQKsV4Vwlzy"
+   },
+   "outputs": [],
+   "source": [
+    "batch_size = 128\n",
+    "embedding_size = 128 # Dimension of the embedding vector.\n",
+    "skip_window = 1 # How many words to consider left and right.\n",
+    "num_skips = 2 # How many times to reuse an input to generate a label.\n",
+    "# We pick a random validation set to sample nearest neighbors. here we limit the\n",
+    "# validation samples to the words that have a low numeric ID, which by\n",
+    "# construction are also the most frequent. \n",
+    "valid_size = 16 # Random set of words to evaluate similarity on.\n",
+    "valid_window = 100 # Only pick dev samples in the head of the distribution.\n",
+    "valid_examples = np.array(random.sample(range(valid_window), valid_size))\n",
+    "num_sampled = 64 # Number of negative examples to sample.\n",
+    "\n",
+    "graph = tf.Graph()\n",
+    "\n",
+    "with graph.as_default(), tf.device('/cpu:0'):\n",
+    "\n",
+    "  # Input data.\n",
+    "  train_dataset = tf.placeholder(tf.int32, shape=[batch_size])\n",
+    "  train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])\n",
+    "  valid_dataset = tf.constant(valid_examples, dtype=tf.int32)\n",
+    "  \n",
+    "  # Variables.\n",
+    "  embeddings = tf.Variable(\n",
+    "    tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))\n",
+    "  softmax_weights = tf.Variable(\n",
+    "    tf.truncated_normal([vocabulary_size, embedding_size],\n",
+    "                         stddev=1.0 / math.sqrt(embedding_size)))\n",
+    "  softmax_biases = tf.Variable(tf.zeros([vocabulary_size]))\n",
+    "  \n",
+    "  # Model.\n",
+    "  # Look up embeddings for inputs.\n",
+    "  embed = tf.nn.embedding_lookup(embeddings, train_dataset)\n",
+    "  # Compute the softmax loss, using a sample of the negative labels each time.\n",
+    "  loss = tf.reduce_mean(\n",
+    "    tf.nn.sampled_softmax_loss(softmax_weights, softmax_biases, embed,\n",
+    "                               train_labels, num_sampled, vocabulary_size))\n",
+    "\n",
+    "  # Optimizer.\n",
+    "  optimizer = tf.train.AdagradOptimizer(1.0).minimize(loss)\n",
+    "  \n",
+    "  # Compute the similarity between minibatch examples and all embeddings.\n",
+    "  # We use the cosine distance:\n",
+    "  norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))\n",
+    "  normalized_embeddings = embeddings / norm\n",
+    "  valid_embeddings = tf.nn.embedding_lookup(\n",
+    "    normalized_embeddings, valid_dataset)\n",
+    "  similarity = tf.matmul(valid_embeddings, tf.transpose(normalized_embeddings))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 66,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     },
+     "output_extras": [
+      {
+       "item_id": 23
+      },
+      {
+       "item_id": 48
+      },
+      {
+       "item_id": 61
+      }
+     ]
+    },
+    "colab_type": "code",
+    "collapsed": false,
+    "executionInfo": {
+     "elapsed": 436189,
+     "status": "ok",
+     "timestamp": 1445965429787,
+     "user": {
+      "color": "#1FA15D",
+      "displayName": "Vincent Vanhoucke",
+      "isAnonymous": false,
+      "isMe": true,
+      "permissionId": "05076109866853157986",
+      "photoUrl": "//lh6.googleusercontent.com/-cCJa7dTDcgQ/AAAAAAAAAAI/AAAAAAAACgw/r2EZ_8oYer4/s50-c-k-no/photo.jpg",
+      "sessionId": "2f1ffade4c9f20de",
+      "userId": "102167687554210253930"
+     },
+     "user_tz": 420
+    },
+    "id": "1bQFGceBxrWW",
+    "outputId": "5ebd6d9a-33c6-4bcd-bf6d-252b0b6055e4"
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Initialized\n",
+      "Average loss at step 0: 8.193994\n",
+      "Nearest to first: medians, factoring, merrill, dmc, popularizer, ahijah, comore, inxs,\n",
+      "Nearest to when: duplicating, subfields, swordfish, agilent, eur, cognomen, appreciable, citro,\n",
+      "Nearest to is: subservient, holiness, magnate, emptiness, disintegrating, rory, landsat, theorem,\n",
+      "Nearest to their: online, eris, jarman, tertullian, socrates, stench, casing, ascetics,\n",
+      "Nearest to zero: devo, normale, deformation, virility, negativity, dunn, cataract, verdi,\n",
+      "Nearest to new: cements, countering, slovakia, asia, cline, trier, kilby, grandeur,\n",
+      "Nearest to to: dye, staining, flights, hacked, devoid, dynamics, fetishism, defeats,\n",
+      "Nearest to or: serene, usurped, injera, reset, cacao, howlin, avatar, herodotus,\n",
+      "Nearest to the: pits, halfback, falsity, synthesize, gringo, prix, dg, scientology,\n",
+      "Nearest to during: butcher, tennessee, nomadic, notational, chiefly, colonized, ripken, subdivision,\n",
+      "Nearest to six: held, perceptive, shellfish, lindo, overestimated, bribes, ia, destry,\n",
+      "Nearest to state: diarrhoea, sen, abridgment, anoint, sketch, sumatra, iridescent, biomes,\n",
+      "Nearest to in: raped, differs, annul, install, edt, stocks, deicide, fula,\n",
+      "Nearest to over: unconsciousness, yitzchak, milligan, greenman, para, benson, wields, codecs,\n",
+      "Nearest to i: fever, thermodynamically, leaks, uighur, elijah, symonds, golems, discursive,\n",
+      "Nearest to known: applying, superconductor, phillips, situ, numismatic, basilides, causative, plantagenet,\n",
+      "Average loss at step 2000: 4.362755\n",
+      "Average loss at step 4000: 3.863167\n",
+      "Average loss at step 6000: 3.792338\n",
+      "Average loss at step 8000: 3.683231\n",
+      "Average loss at step 10000: 3.617616\n",
+      "Nearest to first: second, popularizer, next, calorie, bahasa, freeciv, powder, aleinu,\n",
+      "Nearest to when: where, agilent, appreciable, duplicating, subfields, cerf, eur, swordfish,\n",
+      "Nearest to is: was, are, has, be, kidding, attained, tutor, protective,\n",
+      "Nearest to their: his, its, the, agreeable, s, online, this, socrates,\n",
+      "Nearest to zero: nine, eight, five, six, seven, three, four, two,\n",
+      "Nearest to new: slovakia, kilby, kaplan, methuen, tic, asia, trier, ucs,\n",
+      "Nearest to to: would, samos, circumscription, flights, psychiatry, not, paige, cottingley,\n",
+      "Nearest to or: and, than, cockpit, lapsed, pressurized, keen, square, spaniard,\n",
+      "Nearest to the: a, this, his, its, their, zz, synthesize, an,\n",
+      "Nearest to during: subdivision, through, nomadic, coming, booklet, in, following, metroid,\n",
+      "Nearest to six: eight, seven, five, four, three, nine, zero, two,\n",
+      "Nearest to state: espn, anoint, biomes, malaya, childe, sen, loaders, bundle,\n",
+      "Nearest to in: on, of, at, from, through, with, dhimmi, for,\n",
+      "Nearest to over: milligan, apo, hamilcar, latex, diem, rationalist, berger, klaproth,\n",
+      "Nearest to i: symonds, elijah, fever, azathoth, cypher, sends, fim, flatly,\n",
+      "Nearest to known: basilides, entry, an, esperantists, nashe, used, situ, sess,\n",
+      "Average loss at step 12000: 3.601654\n",
+      "Average loss at step 14000: 3.575543\n",
+      "Average loss at step 16000: 3.408424\n",
+      "Average loss at step 18000: 3.460736\n",
+      "Average loss at step 20000: 3.537892\n",
+      "Nearest to first: next, second, truman, brooker, bahasa, last, freeciv, popularizer,\n",
+      "Nearest to when: where, if, hydrodynamics, during, was, agilent, recognising, through,\n",
+      "Nearest to is: was, are, has, but, does, were, stosunku, be,\n",
+      "Nearest to their: his, its, the, some, her, any, these, socrates,\n",
+      "Nearest to zero: five, six, seven, four, three, nine, eight, two,\n",
+      "Nearest to new: slovakia, asia, trier, kaplan, kilby, tic, cline, obedient,\n",
+      "Nearest to to: towards, propagated, hacked, would, obsessed, not, can, will,\n",
+      "Nearest to or: and, than, for, hydrothermal, benitez, keen, chisinau, equus,\n",
+      "Nearest to the: its, their, his, an, territorial, this, realpolitik, any,\n",
+      "Nearest to during: at, following, subdivision, metroid, in, through, when, nomadic,\n",
+      "Nearest to six: eight, five, seven, four, nine, three, two, zero,\n",
+      "Nearest to state: loaders, malaya, childe, espn, biomes, largest, lysosomes, anoint,\n",
+      "Nearest to in: at, with, on, through, from, dhimmi, and, for,\n",
+      "Nearest to over: milligan, logarithmic, rationalist, poseidon, apo, hong, diem, aleutians,\n",
+      "Nearest to i: ii, symonds, cii, elijah, kelly, azathoth, rip, miquelon,\n",
+      "Nearest to known: used, defined, seen, well, leftists, nashe, annoyed, avestan,\n",
+      "Average loss at step 22000: 3.497390\n",
+      "Average loss at step 24000: 3.489797\n",
+      "Average loss at step 26000: 3.480174\n",
+      "Average loss at step 28000: 3.484245\n",
+      "Average loss at step 30000: 3.499509\n",
+      "Nearest to first: next, second, last, truman, halting, beverage, initialism, brooker,\n",
+      "Nearest to when: where, if, during, though, while, was, before, hydrodynamics,\n",
+      "Nearest to is: was, has, are, does, be, became, attained, if,\n",
+      "Nearest to their: its, his, the, her, these, some, any, our,\n",
+      "Nearest to zero: five, eight, seven, four, six, three, nine, two,\n",
+      "Nearest to new: slovakia, kaplan, tic, graphics, argumentation, asia, vieux, total,\n",
+      "Nearest to to: would, will, can, propagated, could, must, svg, agricultural,\n",
+      "Nearest to or: and, suzanne, than, ducati, prosper, but, viollet, glottal,\n",
+      "Nearest to the: their, its, his, some, a, this, angora, her,\n",
+      "Nearest to during: at, when, after, in, through, following, metroid, diver,\n",
+      "Nearest to six: eight, four, seven, nine, five, three, two, zero,\n",
+      "Nearest to state: malaya, loaders, lysosomes, biomes, childe, marked, largest, audible,\n",
+      "Nearest to in: at, during, dhimmi, on, from, under, and, of,\n",
+      "Nearest to over: milligan, logarithmic, rationalist, poseidon, latex, into, aleutians, macross,\n",
+      "Nearest to i: ii, we, g, azathoth, carr, spooky, kelly, symonds,\n",
+      "Nearest to known: used, well, defined, such, seen, leftists, annoyed, nashe,\n",
+      "Average loss at step 32000: 3.501771\n",
+      "Average loss at step 34000: 3.494286\n",
+      "Average loss at step 36000: 3.455392\n",
+      "Average loss at step 38000: 3.305419\n",
+      "Average loss at step 40000: 3.429850\n",
+      "Nearest to first: second, next, last, truman, bahasa, conceits, popularizer, lecoq,\n",
+      "Nearest to when: if, before, while, during, where, though, after, hydrodynamics,\n",
+      "Nearest to is: was, does, are, has, be, if, propelled, maroger,\n",
+      "Nearest to their: its, his, her, the, any, our, these, other,\n",
+      "Nearest to zero: seven, five, eight, three, nine, six, two, four,\n",
+      "Nearest to new: slovakia, renunciation, bionic, statement, trier, icebergs, monkeys, alien,\n",
+      "Nearest to to: must, will, would, towards, might, connectedness, propagated, could,\n",
+      "Nearest to or: and, than, benitez, a, luz, budge, vg, astm,\n",
+      "Nearest to the: their, its, any, each, a, this, some, his,\n",
+      "Nearest to during: when, through, after, at, following, around, on, diver,\n",
+      "Nearest to six: five, four, three, seven, eight, two, nine, one,\n",
+      "Nearest to state: loaders, malaya, stylish, botham, bundle, lysosomes, republic, rooks,\n",
+      "Nearest to in: of, viewership, dhimmi, melodic, and, from, for, within,\n",
+      "Nearest to over: latex, aleutians, poseidon, across, into, altenberg, marjoram, alleviating,\n",
+      "Nearest to i: we, ii, they, you, t, spooky, he, g,\n",
+      "Nearest to known: used, defined, such, well, sucre, khazaria, seen, monsignor,\n",
+      "Average loss at step 42000: 3.435585\n",
+      "Average loss at step 44000: 3.451757\n",
+      "Average loss at step 46000: 3.452523\n",
+      "Average loss at step 48000: 3.354169\n",
+      "Average loss at step 50000: 3.381607\n",
+      "Nearest to first: second, next, last, third, freeciv, truman, same, latter,\n",
+      "Nearest to when: if, where, while, after, before, during, though, although,\n",
+      "Nearest to is: was, has, are, does, be, became, amortized, repetitive,\n",
+      "Nearest to their: its, his, her, the, our, any, characterizes, these,\n",
+      "Nearest to zero: five, eight, seven, six, four, three, nine, two,\n",
+      "Nearest to new: slovakia, statement, renunciation, wide, conceiving, prussian, labonte, cory,\n",
+      "Nearest to to: would, connectedness, algal, rtf, cloning, towards, cottingley, can,\n",
+      "Nearest to or: and, than, glottal, suzanne, benitez, lifestyles, like, jacinto,\n",
+      "Nearest to the: its, their, his, this, some, a, any, angora,\n",
+      "Nearest to during: after, in, when, at, through, following, under, against,\n",
+      "Nearest to six: seven, eight, four, nine, three, five, one, two,\n",
+      "Nearest to state: stylish, loaders, malaya, states, lysosomes, bundle, largest, botham,\n",
+      "Nearest to in: during, of, dhimmi, from, since, within, on, therapists,\n",
+      "Nearest to over: aleutians, poseidon, diem, latex, about, measuring, batting, carlisle,\n",
+      "Nearest to i: we, you, ii, they, azathoth, cerevisiae, t, rip,\n",
+      "Nearest to known: used, defined, such, well, regarded, classified, seen, sucre,\n",
+      "Average loss at step 52000: 3.435977\n",
+      "Average loss at step 54000: 3.427845\n",
+      "Average loss at step 56000: 3.437118\n",
+      "Average loss at step 58000: 3.396612\n",
+      "Average loss at step 60000: 3.393462\n",
+      "Nearest to first: next, second, last, third, truman, only, best, sailor,\n",
+      "Nearest to when: if, after, before, where, although, while, during, though,\n",
+      "Nearest to is: was, has, are, does, became, tutor, be, contains,\n",
+      "Nearest to their: its, his, her, the, our, these, some, your,\n",
+      "Nearest to zero: five, four, six, seven, eight, nine, three, two,\n",
+      "Nearest to new: slovakia, conceiving, prussian, pacheco, gundobad, focussing, channeled, wide,\n",
+      "Nearest to to: towards, would, cottingley, will, legged, not, rtf, propagated,\n",
+      "Nearest to or: and, than, glottal, non, benitez, vg, like, bmx,\n",
+      "Nearest to the: its, their, a, his, this, desai, any, consecutive,\n",
+      "Nearest to during: after, in, when, following, before, although, at, since,\n",
+      "Nearest to six: four, eight, five, nine, seven, three, zero, one,\n",
+      "Nearest to state: malaya, loaders, states, lysosomes, property, government, city, republic,\n",
+      "Nearest to in: during, within, since, at, of, dhimmi, from, into,\n",
+      "Nearest to over: around, poseidon, into, aleutians, about, diem, measuring, across,\n",
+      "Nearest to i: we, you, ii, they, t, rhombic, rip, flintlock,\n",
+      "Nearest to known: used, defined, such, well, regarded, classified, khazaria, possible,\n",
+      "Average loss at step 62000: 3.237064\n",
+      "Average loss at step 64000: 3.258351\n",
+      "Average loss at step 66000: 3.401028\n",
+      "Average loss at step 68000: 3.395535\n",
+      "Average loss at step 70000: 3.360291\n",
+      "Nearest to first: second, next, last, third, same, truman, sailor, popularizer,\n",
+      "Nearest to when: if, where, while, before, after, though, because, however,\n",
+      "Nearest to is: was, has, be, are, makes, became, synclavier, requires,\n",
+      "Nearest to their: its, his, her, the, our, your, these, personal,\n",
+      "Nearest to zero: five, six, four, eight, seven, three, nine, two,\n",
+      "Nearest to new: slovakia, pacheco, renunciation, tic, channeled, conceiving, gundobad, trump,\n",
+      "Nearest to to: will, must, towards, in, can, could, would, connectedness,\n",
+      "Nearest to or: and, while, glottal, than, any, benitez, vg, but,\n",
+      "Nearest to the: their, a, any, its, this, each, these, or,\n",
+      "Nearest to during: after, in, before, until, at, following, through, under,\n",
+      "Nearest to six: seven, eight, five, four, nine, three, zero, two,\n",
+      "Nearest to state: states, lysosomes, city, provincial, loaders, malaya, feasibility, government,\n",
+      "Nearest to in: within, during, on, dhimmi, between, carthusian, to, keeps,\n",
+      "Nearest to over: around, poseidon, aleutians, diem, explodes, routine, defining, logarithmic,\n",
+      "Nearest to i: we, you, ii, g, rip, puzzled, they, kenobi,\n",
+      "Nearest to known: used, defined, regarded, classified, seen, such, well, considered,\n",
+      "Average loss at step 72000: 3.376012\n",
+      "Average loss at step 74000: 3.349915\n",
+      "Average loss at step 76000: 3.316679\n",
+      "Average loss at step 78000: 3.351037\n",
+      "Average loss at step 80000: 3.376237\n",
+      "Nearest to first: second, next, last, third, popularizer, same, sailor, best,\n",
+      "Nearest to when: before, if, after, while, though, where, during, although,\n",
+      "Nearest to is: was, has, are, be, dissociation, became, requires, although,\n",
+      "Nearest to their: its, his, her, our, your, the, ravi, my,\n",
+      "Nearest to zero: five, six, seven, eight, four, three, nine, two,\n",
+      "Nearest to new: slovakia, pacheco, conceiving, prussian, argumentation, imaging, craftsman, distaste,\n",
+      "Nearest to to: will, towards, must, would, rtf, should, could, inductee,\n",
+      "Nearest to or: and, jacinto, than, while, cfp, glottal, benitez, vg,\n",
+      "Nearest to the: its, his, this, their, cebit, a, skyscrapers, riefenstahl,\n",
+      "Nearest to during: after, in, through, before, until, throughout, when, following,\n",
+      "Nearest to six: five, seven, eight, four, three, nine, zero, two,\n",
+      "Nearest to state: city, states, government, prince, loaders, biomes, ivy, provincial,\n",
+      "Nearest to in: during, until, on, within, into, throughout, pew, after,\n",
+      "Nearest to over: around, explodes, dodo, poseidon, aleutians, into, measuring, about,\n",
+      "Nearest to i: ii, we, you, g, they, cii, iii, t,\n",
+      "Nearest to known: used, defined, regarded, classified, seen, such, considered, called,\n",
+      "Average loss at step 82000: 3.410091\n",
+      "Average loss at step 84000: 3.408310\n",
+      "Average loss at step 86000: 3.392920\n",
+      "Average loss at step 88000: 3.350469\n",
+      "Average loss at step 90000: 3.363031\n",
+      "Nearest to first: second, next, last, third, truman, same, halting, sailor,\n",
+      "Nearest to when: while, before, if, after, where, though, although, until,\n",
+      "Nearest to is: was, are, has, requires, becomes, does, although, makes,\n",
+      "Nearest to their: its, his, her, our, your, the, them, some,\n",
+      "Nearest to zero: five, seven, eight, six, four, nine, three, two,\n",
+      "Nearest to new: slovakia, pirin, pacheco, projection, particular, renunciation, bmx, callous,\n",
+      "Nearest to to: towards, circumscription, would, preoccupied, will, must, legged, safi,\n",
+      "Nearest to or: and, glottal, unaspirated, nucleons, than, jacinto, though, ducati,\n",
+      "Nearest to the: its, his, their, this, any, our, each, hurrians,\n",
+      "Nearest to during: after, in, while, until, before, through, at, throughout,\n",
+      "Nearest to six: seven, eight, five, nine, four, three, zero, two,\n",
+      "Nearest to state: states, city, government, lysosomes, provincial, loaders, shin, malaya,\n",
+      "Nearest to in: during, within, of, under, dhimmi, with, at, and,\n",
+      "Nearest to over: around, poseidon, dodo, into, about, through, diem, measuring,\n",
+      "Nearest to i: we, ii, you, g, they, cii, t, iii,\n",
+      "Nearest to known: used, regarded, defined, such, classified, seen, described, referred,\n",
+      "Average loss at step 92000: 3.396992\n",
+      "Average loss at step 94000: 3.256399\n",
+      "Average loss at step 96000: 3.356999\n",
+      "Average loss at step 98000: 3.241581\n",
+      "Average loss at step 100000: 3.355274\n",
+      "Nearest to first: next, last, second, third, truman, halting, defeat, sailor,\n",
+      "Nearest to when: if, while, where, after, before, though, although, during,\n",
+      "Nearest to is: was, has, are, became, be, syringe, requires, had,\n",
+      "Nearest to their: its, his, her, our, your, the, some, these,\n",
+      "Nearest to zero: five, seven, eight, six, four, nine, three, two,\n",
+      "Nearest to new: projection, slovakia, monkeys, chancery, renunciation, callous, pacheco, conceiving,\n",
+      "Nearest to to: will, must, could, and, would, should, towards, can,\n",
+      "Nearest to or: and, glottal, than, vg, transitioned, optic, whedon, dawson,\n",
+      "Nearest to the: their, his, its, a, whose, your, her, some,\n",
+      "Nearest to during: after, in, before, through, throughout, until, following, within,\n",
+      "Nearest to six: seven, eight, four, five, nine, three, two, zero,\n",
+      "Nearest to state: states, city, provincial, government, prince, shin, enumerable, lysosomes,\n",
+      "Nearest to in: during, within, on, until, at, merdeka, from, dhimmi,\n",
+      "Nearest to over: around, routine, through, within, full, about, measuring, dodo,\n",
+      "Nearest to i: we, you, ii, they, he, rip, g, t,\n",
+      "Nearest to known: defined, such, used, regarded, classified, possible, described, seen,\n"
+     ]
+    }
+   ],
+   "source": [
+    "num_steps = 100001\n",
+    "\n",
+    "with tf.Session(graph=graph) as session:\n",
+    "  tf.initialize_all_variables().run()\n",
+    "  print('Initialized')\n",
+    "  average_loss = 0\n",
+    "  for step in range(num_steps):\n",
+    "    batch_data, batch_labels = generate_batch(\n",
+    "      batch_size, num_skips, skip_window)\n",
+    "    feed_dict = {train_dataset : batch_data, train_labels : batch_labels}\n",
+    "    _, l = session.run([optimizer, loss], feed_dict=feed_dict)\n",
+    "    average_loss += l\n",
+    "    if step % 2000 == 0:\n",
+    "      if step > 0:\n",
+    "        average_loss = average_loss / 2000\n",
+    "      # The average loss is an estimate of the loss over the last 2000 batches.\n",
+    "      print('Average loss at step %d: %f' % (step, average_loss))\n",
+    "      average_loss = 0\n",
+    "    # note that this is expensive (~20% slowdown if computed every 500 steps)\n",
+    "    if step % 10000 == 0:\n",
+    "      sim = similarity.eval()\n",
+    "      for i in xrange(valid_size):\n",
+    "        valid_word = reverse_dictionary[valid_examples[i]]\n",
+    "        top_k = 8 # number of nearest neighbors\n",
+    "        nearest = (-sim[i, :]).argsort()[1:top_k+1]\n",
+    "        log = 'Nearest to %s:' % valid_word\n",
+    "        for k in xrange(top_k):\n",
+    "          close_word = reverse_dictionary[nearest[k]]\n",
+    "          log = '%s %s,' % (log, close_word)\n",
+    "        print(log)\n",
+    "  final_embeddings = normalized_embeddings.eval()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 67,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     }
+    },
+    "colab_type": "code",
+    "collapsed": true,
+    "id": "jjJXYA_XzV79"
+   },
+   "outputs": [],
+   "source": [
+    "num_points = 400\n",
+    "\n",
+    "tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000)\n",
+    "two_d_embeddings = tsne.fit_transform(final_embeddings[1:num_points+1, :])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 68,
+   "metadata": {
+    "cellView": "both",
+    "colab": {
+     "autoexec": {
+      "startup": false,
+      "wait_interval": 0
+     },
+     "output_extras": [
+      {
+       "item_id": 1
+      }
+     ]
+    },
+    "colab_type": "code",
+    "collapsed": false,
+    "executionInfo": {
+     "elapsed": 4763,
+     "status": "ok",
+     "timestamp": 1445965465525,
+     "user": {
+      "color": "#1FA15D",
+      "displayName": "Vincent Vanhoucke",
+      "isAnonymous": false,
+      "isMe": true,
+      "permissionId": "05076109866853157986",
+      "photoUrl": "//lh6.googleusercontent.com/-cCJa7dTDcgQ/AAAAAAAAAAI/AAAAAAAACgw/r2EZ_8oYer4/s50-c-k-no/photo.jpg",
+      "sessionId": "2f1ffade4c9f20de",
+      "userId": "102167687554210253930"
+     },
+     "user_tz": 420
+    },
+    "id": "o_e0D_UezcDe",
+    "outputId": "df22e4a5-e8ec-4e5e-d384-c6cf37c68c34"
+   },
+   "outputs": [],
+   "source": [
+    "def plot(embeddings, labels):\n",
+    "  assert embeddings.shape[0] >= len(labels), 'More labels than embeddings'\n",
+    "  pylab.figure(figsize=(15,15))  # in inches\n",
+    "  for i, label in enumerate(labels):\n",
+    "    x, y = embeddings[i,:]\n",
+    "    pylab.scatter(x, y)\n",
+    "    pylab.annotate(label, xy=(x, y), xytext=(5, 2), textcoords='offset points',\n",
+    "                   ha='right', va='bottom')\n",
+    "  pylab.show()\n",
+    "\n",
+    "words = [reverse_dictionary[i] for i in range(1, num_points+1)]\n",
+    "plot(two_d_embeddings, words)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "colab_type": "text",
+    "id": "QB5EFrBnpNnc"
+   },
+   "source": [
+    "---\n",
+    "\n",
+    "Problem\n",
+    "-------\n",
+    "\n",
+    "An alternative to skip-gram is another Word2Vec model called [CBOW](http://arxiv.org/abs/1301.3781) (Continuous Bag of Words). In the CBOW model, instead of predicting a context word from a word vector, you predict a word from the sum of all the word vectors in its context. Implement and evaluate a CBOW model trained on the text8 dataset.\n",
+    "\n",
+    "---"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "The difference between **Skip-Gram model** and the **Continuous Bag-of-Words (CBOW)** model is that while **Skip-Gram model** predicts context words from the target words, **CBOW** model does the inverse and predicts target words from context words. *[From Tensorflow.org]*\n",
+    "\n",
+    "In order to use the CBOW model, I will update the generate_batch function so that **batch** contains context words and **labels** contain target words."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 69,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "data: ['anarchism', 'originated', 'as', 'a', 'term', 'of', 'abuse', 'first']\n",
+      "(8,)\n",
+      "(8, 1)\n",
+      "\n",
+      "with num_skips = 2 and skip_window = 1:\n",
+      "    batch: ['as', 'anarchism', 'originated', 'a', 'as', 'term', 'a', 'of']\n",
+      "    labels: ['originated', 'originated', 'as', 'as', 'a', 'a', 'term', 'term']\n",
+      "(8,)\n",
+      "(8, 1)\n",
+      "\n",
+      "with num_skips = 4 and skip_window = 2:\n",
+      "    batch: ['originated', 'anarchism', 'term', 'a', 'of', 'as', 'originated', 'term']\n",
+      "    labels: ['as', 'as', 'as', 'as', 'a', 'a', 'a', 'a']\n"
+     ]
+    }
+   ],
+   "source": [
+    "data_index = 0\n",
+    "\n",
+    "def generate_batch_cbow(batch_size, num_skips, skip_window):\n",
+    "  global data_index\n",
+    "  assert batch_size % num_skips == 0\n",
+    "  assert num_skips <= 2 * skip_window\n",
+    "  batch = np.ndarray(shape=(batch_size), dtype=np.int32)\n",
+    "  labels = np.ndarray(shape=(batch_size, 1), dtype=np.int32)\n",
+    "  span = 2 * skip_window + 1 # [ skip_window target skip_window ]\n",
+    "  buffer = collections.deque(maxlen=span)\n",
+    "  for _ in range(span):\n",
+    "    buffer.append(data[data_index])\n",
+    "    data_index = (data_index + 1) % len(data)\n",
+    "  for i in range(batch_size // num_skips):\n",
+    "    target = skip_window  # target label at the center of the buffer\n",
+    "    targets_to_avoid = [ skip_window ]\n",
+    "    for j in range(num_skips):\n",
+    "      while target in targets_to_avoid:\n",
+    "        target = random.randint(0, span - 1)\n",
+    "      targets_to_avoid.append(target)\n",
+    "      \n",
+    "      # Everything stays the same as the Skip-Gram model except\n",
+    "      # labels and batch are switched\n",
+    "      labels[i * num_skips + j, 0] = buffer[skip_window]\n",
+    "      batch[i * num_skips + j] = buffer[target]\n",
+    "    buffer.append(data[data_index])\n",
+    "    data_index = (data_index + 1) % len(data)\n",
+    "  \n",
+    "  return batch, labels\n",
+    "\n",
+    "print('data:', [reverse_dictionary[di] for di in data[:8]])\n",
+    "\n",
+    "for num_skips, skip_window in [(2, 1), (4, 2)]:\n",
+    "    data_index = 0\n",
+    "    batch, labels = generate_batch_cbow(batch_size=8, num_skips=num_skips, skip_window=skip_window)\n",
+    "    print(np.shape(batch))\n",
+    "    print(np.shape(labels))\n",
+    "    print('\\nwith num_skips = %d and skip_window = %d:' % (num_skips, skip_window))\n",
+    "    print('    batch:', [reverse_dictionary[bi] for bi in batch])\n",
+    "    print('    labels:', [reverse_dictionary[li] for li in labels.reshape(8)])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 70,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "batch_size = 128\n",
+    "embedding_size = 128 # Dimension of the embedding vector.\n",
+    "skip_window = 1 # How many words to consider left and right.\n",
+    "num_skips = 2 # How many times to reuse an input to generate a label.\n",
+    "# We pick a random validation set to sample nearest neighbors. here we limit the\n",
+    "# validation samples to the words that have a low numeric ID, which by\n",
+    "# construction are also the most frequent. \n",
+    "valid_size = 16 # Random set of words to evaluate similarity on.\n",
+    "valid_window = 100 # Only pick dev samples in the head of the distribution.\n",
+    "valid_examples = np.array(random.sample(range(valid_window), valid_size))\n",
+    "num_sampled = 64 # Number of negative examples to sample.\n",
+    "\n",
+    "graph = tf.Graph()\n",
+    "\n",
+    "with graph.as_default(), tf.device('/cpu:0'):\n",
+    "\n",
+    "  # Input data.\n",
+    "  train_dataset = tf.placeholder(tf.int32, shape=[batch_size])\n",
+    "  train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])\n",
+    "  valid_dataset = tf.constant(valid_examples, dtype=tf.int32)\n",
+    "  \n",
+    "  # Variables.\n",
+    "  embeddings = tf.Variable(\n",
+    "    tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))\n",
+    "  softmax_weights = tf.Variable(\n",
+    "    tf.truncated_normal([vocabulary_size, embedding_size],\n",
+    "                         stddev=1.0 / math.sqrt(embedding_size)))\n",
+    "  softmax_biases = tf.Variable(tf.zeros([vocabulary_size]))\n",
+    "  \n",
+    "  # Model.\n",
+    "  # Look up embeddings for inputs.\n",
+    "  embed = tf.nn.embedding_lookup(embeddings, train_dataset)\n",
+    "  # Compute the softmax loss, using a sample of the negative labels each time.\n",
+    "  loss = tf.reduce_mean(\n",
+    "    tf.nn.sampled_softmax_loss(softmax_weights, softmax_biases, embed,\n",
+    "                               train_labels, num_sampled, vocabulary_size))\n",
+    "\n",
+    "  # Optimizer.\n",
+    "  optimizer = tf.train.AdagradOptimizer(1.0).minimize(loss)\n",
+    "  \n",
+    "  # Compute the similarity between minibatch examples and all embeddings.\n",
+    "  # We use the cosine distance:\n",
+    "  norm = tf.sqrt(tf.reduce_sum(tf.square(embeddings), 1, keep_dims=True))\n",
+    "  normalized_embeddings = embeddings / norm\n",
+    "  valid_embeddings = tf.nn.embedding_lookup(\n",
+    "    normalized_embeddings, valid_dataset)\n",
+    "  similarity = tf.matmul(valid_embeddings, tf.transpose(normalized_embeddings))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 71,
+   "metadata": {
+    "collapsed": false
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Initialized\n",
+      "Average loss at step 0: 8.044578\n",
+      "Nearest to who: shrunk, civilized, jeroboam, ulvaeus, monarchic, excerpt, maroons, microbes,\n",
+      "Nearest to will: hq, concedes, stipend, garland, turing, elucidation, renaissance, outer,\n",
+      "Nearest to d: continual, disenfranchisement, azul, mazar, convictions, abundantly, capoeiristas, multicellular,\n",
+      "Nearest to after: sociable, ww, abolishing, devious, remainder, lester, secularization, cartridge,\n",
+      "Nearest to have: afl, flattening, couscous, tightening, synonymous, adrenaline, understood, stuntman,\n",
+      "Nearest to american: hint, polemic, solemnly, sages, pasha, dislikes, eb, birka,\n",
+      "Nearest to between: currency, venomous, pcc, pcbs, versatility, cantons, indulged, premium,\n",
+      "Nearest to use: imre, vivekananda, convicts, jass, stairs, allophones, urinating, geller,\n",
+      "Nearest to at: tot, hing, esdi, each, clinics, laugh, futile, immemorial,\n",
+      "Nearest to this: arabica, abandon, vav, echelon, devotion, hypoglycemic, functioned, polonaise,\n",
+      "Nearest to he: nonprofit, ferdinand, oration, dsl, influenza, priests, ruskin, adversity,\n",
+      "Nearest to only: academically, irate, endangered, aman, notre, epidemics, monarchies, canis,\n",
+      "Nearest to six: loyalty, icsu, coeur, inspections, forecast, advancing, destabilization, tum,\n",
+      "Nearest to in: sunflower, silvanus, friday, magic, enterprise, baptized, discipleship, stoicism,\n",
+      "Nearest to united: galway, posited, petty, summit, consonant, vesuvius, sandworm, julia,\n",
+      "Nearest to called: connoisseur, dump, blood, si, bars, guilds, fung, monarchists,\n",
+      "Average loss at step 2000: 4.368932\n",
+      "Average loss at step 4000: 3.866541\n",
+      "Average loss at step 6000: 3.792614\n",
+      "Average loss at step 8000: 3.682499\n",
+      "Average loss at step 10000: 3.613551\n",
+      "Nearest to who: he, they, monarchic, and, she, ecuador, csf, civilized,\n",
+      "Nearest to will: would, earley, etext, daugavpils, concedes, can, exilic, hq,\n",
+      "Nearest to d: continual, sindhu, and, abundantly, denounced, koenigsegg, ordaining, bricks,\n",
+      "Nearest to after: homeomorphism, asis, learns, charging, dialectal, apo, secularization, cartridge,\n",
+      "Nearest to have: be, had, has, were, are, adrenaline, do, dirt,\n",
+      "Nearest to american: ean, resorts, and, sages, undisputed, crusade, containing, solemnly,\n",
+      "Nearest to between: ocp, grasped, freeza, indulged, forties, currency, pcc, carousel,\n",
+      "Nearest to use: imre, vivekananda, development, shiva, geller, sublime, meriwether, ozzfest,\n",
+      "Nearest to at: during, tot, in, by, on, hing, from, clinics,\n",
+      "Nearest to this: it, the, which, some, ithaca, norah, worldstatesmen, abandon,\n",
+      "Nearest to he: it, she, they, who, there, loudspeaker, hdi, icbm,\n",
+      "Nearest to only: iss, endangered, academically, notre, anthropic, elision, household, then,\n",
+      "Nearest to six: eight, seven, three, five, four, nine, zero, two,\n",
+      "Nearest to in: of, from, on, with, for, at, dyer, among,\n",
+      "Nearest to united: galway, posited, fugitive, last, genji, dishes, enlargement, consonant,\n",
+      "Nearest to called: monad, ghola, guilds, bars, nolan, promenade, erie, travolta,\n",
+      "Average loss at step 12000: 3.605517\n",
+      "Average loss at step 14000: 3.570433\n",
+      "Average loss at step 16000: 3.404587\n",
+      "Average loss at step 18000: 3.458411\n",
+      "Average loss at step 20000: 3.539390\n",
+      "Nearest to who: he, which, she, they, also, never, often, csf,\n",
+      "Nearest to will: would, can, could, should, may, to, exilic, might,\n",
+      "Nearest to d: b, denounced, hamburger, conditioner, sindhu, notated, bricks, shooter,\n",
+      "Nearest to after: before, asis, homeomorphism, learns, dialectal, dail, by, against,\n",
+      "Nearest to have: had, has, be, are, were, having, inconceivable, shinto,\n",
+      "Nearest to american: english, crusade, resorts, polemic, hobsbawm, sages, layering, solemnly,\n",
+      "Nearest to between: with, around, ocp, spindle, indulged, playa, from, infested,\n",
+      "Nearest to use: imre, vivekananda, part, shiva, sublime, development, harps, malacca,\n",
+      "Nearest to at: in, on, during, tot, from, with, under, ovarian,\n",
+      "Nearest to this: it, which, the, some, norah, apocrypha, his, devotion,\n",
+      "Nearest to he: it, she, they, who, there, loudspeaker, but, hdi,\n",
+      "Nearest to only: iss, irate, anthropic, elision, even, spoons, endangered, notre,\n",
+      "Nearest to six: eight, seven, four, five, nine, three, two, zero,\n",
+      "Nearest to in: at, on, with, from, and, pitot, during, among,\n",
+      "Nearest to united: genji, fugitive, dishes, galway, posited, affix, enlargement, last,\n",
+      "Nearest to called: mel, ghola, monad, bars, travolta, nolan, irishman, guilds,\n",
+      "Average loss at step 22000: 3.502293\n",
+      "Average loss at step 24000: 3.488388\n",
+      "Average loss at step 26000: 3.479927\n",
+      "Average loss at step 28000: 3.477041\n",
+      "Average loss at step 30000: 3.503812\n",
+      "Nearest to who: he, they, she, which, never, also, many, it,\n",
+      "Nearest to will: would, can, may, could, should, exilic, might, to,\n",
+      "Nearest to d: b, hamburger, shooter, enhancing, sindhu, conditioner, geneticist, quad,\n",
+      "Nearest to after: before, when, during, in, against, astrometric, from, asis,\n",
+      "Nearest to have: had, has, were, having, are, be, include, make,\n",
+      "Nearest to american: english, russian, british, french, sages, crusade, doll, hobsbawm,\n",
+      "Nearest to between: with, around, in, from, infested, ocp, playa, workplaces,\n",
+      "Nearest to use: imre, vivekananda, development, shiva, retardation, sublime, mung, stand,\n",
+      "Nearest to at: in, during, screen, under, on, tot, hon, censorial,\n",
+      "Nearest to this: it, which, that, the, lpc, he, some, there,\n",
+      "Nearest to he: she, it, they, who, there, hdi, ushering, fluorite,\n",
+      "Nearest to only: not, endangered, civilized, proposed, present, incorrect, even, warden,\n",
+      "Nearest to six: eight, four, five, seven, nine, three, zero, two,\n",
+      "Nearest to in: at, during, until, of, draped, on, and, around,\n",
+      "Nearest to united: fugitive, genji, enlargement, affix, kut, posited, galway, gerais,\n",
+      "Nearest to called: ghola, mel, travolta, monad, billiards, nationalized, nolan, deduction,\n",
+      "Average loss at step 32000: 3.499731\n",
+      "Average loss at step 34000: 3.495307\n",
+      "Average loss at step 36000: 3.452651\n",
+      "Average loss at step 38000: 3.296763\n",
+      "Average loss at step 40000: 3.421513\n",
+      "Nearest to who: he, which, she, also, they, often, never, generally,\n",
+      "Nearest to will: would, can, could, should, may, must, might, cannot,\n",
+      "Nearest to d: b, UNK, hamburger, hubs, tiles, adv, lyricists, quad,\n",
+      "Nearest to after: before, during, when, astrometric, asis, dialectal, turntables, against,\n",
+      "Nearest to have: had, has, were, be, having, are, include, waterfowl,\n",
+      "Nearest to american: british, english, crusade, german, french, russian, sages, solemnly,\n",
+      "Nearest to between: with, around, from, ocp, infested, fortuitous, abiding, kj,\n",
+      "Nearest to use: imre, development, shiva, reach, retardation, vivekananda, support, stand,\n",
+      "Nearest to at: on, in, during, tot, bosniak, duplicated, album, for,\n",
+      "Nearest to this: which, the, it, that, any, some, another, advising,\n",
+      "Nearest to he: she, it, they, who, there, i, hdi, then,\n",
+      "Nearest to only: not, notre, even, survived, endangered, naturally, hopeless, officially,\n",
+      "Nearest to six: four, five, eight, seven, nine, three, two, one,\n",
+      "Nearest to in: during, at, of, dyer, for, from, on, until,\n",
+      "Nearest to united: fugitive, kut, genji, affix, enlargement, aegean, west, posited,\n",
+      "Nearest to called: mel, nationalized, ghola, sailors, travolta, nolan, irishman, considered,\n",
+      "Average loss at step 42000: 3.432169\n",
+      "Average loss at step 44000: 3.451831\n",
+      "Average loss at step 46000: 3.451181\n",
+      "Average loss at step 48000: 3.350450\n",
+      "Average loss at step 50000: 3.383377\n",
+      "Nearest to who: he, she, which, they, never, also, interdependence, generally,\n",
+      "Nearest to will: would, could, can, should, may, must, might, cannot,\n",
+      "Nearest to d: b, m, l, hamburger, kosovar, t, o, sindhu,\n",
+      "Nearest to after: before, when, during, while, turntables, afterwards, dialectal, since,\n",
+      "Nearest to have: had, has, were, are, be, having, spectacularly, refer,\n",
+      "Nearest to american: english, crusade, french, african, british, russian, sages, australian,\n",
+      "Nearest to between: with, around, among, from, in, ocp, fortuitous, spindle,\n",
+      "Nearest to use: imre, development, form, retardation, end, part, share, amount,\n",
+      "Nearest to at: during, tot, in, on, cutaway, ovarian, from, monopoles,\n",
+      "Nearest to this: which, it, the, he, novella, deadlines, oscillations, some,\n",
+      "Nearest to he: she, it, they, who, there, hdi, this, eventually,\n",
+      "Nearest to only: first, officially, certainly, iss, endangered, proposed, draper, naturally,\n",
+      "Nearest to six: eight, seven, four, five, three, nine, two, zero,\n",
+      "Nearest to in: during, within, on, from, at, until, of, between,\n",
+      "Nearest to united: fugitive, genji, kut, affix, enlargement, aegean, mosley, posited,\n",
+      "Nearest to called: mel, known, travolta, used, nationalized, knitted, dump, nolan,\n",
+      "Average loss at step 52000: 3.439855\n",
+      "Average loss at step 54000: 3.423912\n",
+      "Average loss at step 56000: 3.438553\n",
+      "Average loss at step 58000: 3.396980\n",
+      "Average loss at step 60000: 3.390309\n",
+      "Nearest to who: he, she, never, often, which, they, generally, also,\n",
+      "Nearest to will: would, could, can, may, should, must, might, cannot,\n",
+      "Nearest to d: b, t, m, quad, l, kosovar, c, hubs,\n",
+      "Nearest to after: before, during, when, while, until, despite, afterwards, astrometric,\n",
+      "Nearest to have: had, has, were, having, are, be, spectacularly, clogged,\n",
+      "Nearest to american: british, crusade, english, russian, african, international, german, french,\n",
+      "Nearest to between: with, among, around, in, from, infested, spindle, ocp,\n",
+      "Nearest to use: imre, form, share, retardation, hor, reflective, reach, respect,\n",
+      "Nearest to at: during, tot, in, on, ovarian, hing, immemorial, fortuitous,\n",
+      "Nearest to this: which, it, some, there, that, the, websites, he,\n",
+      "Nearest to he: she, it, they, there, who, we, pulverized, this,\n",
+      "Nearest to only: quenched, officially, first, replicating, but, probably, interlinked, rca,\n",
+      "Nearest to six: eight, four, five, nine, seven, three, two, zero,\n",
+      "Nearest to in: within, during, since, on, at, of, with, until,\n",
+      "Nearest to united: fugitive, kut, genji, enlargement, aegean, posited, affix, refractory,\n",
+      "Nearest to called: used, considered, known, knitted, mel, referred, stigma, spassky,\n",
+      "Average loss at step 62000: 3.240127\n",
+      "Average loss at step 64000: 3.257526\n",
+      "Average loss at step 66000: 3.403863\n",
+      "Average loss at step 68000: 3.396707\n",
+      "Average loss at step 70000: 3.356754\n",
+      "Nearest to who: he, she, never, they, richard, often, meine, bello,\n",
+      "Nearest to will: would, could, may, can, should, must, might, cannot,\n",
+      "Nearest to d: b, quad, sindhu, l, g, sar, m, adv,\n",
+      "Nearest to after: before, during, when, while, until, against, sensible, stephanie,\n",
+      "Nearest to have: had, has, were, are, be, having, include, contain,\n",
+      "Nearest to american: english, british, african, industrial, seuss, german, international, predatory,\n",
+      "Nearest to between: with, among, around, from, in, within, denarius, anasazi,\n",
+      "Nearest to use: share, form, reach, retardation, imre, amount, reflective, hor,\n",
+      "Nearest to at: during, tot, bosniak, zonker, album, releasing, in, cutaway,\n",
+      "Nearest to this: which, it, the, some, another, that, there, websites,\n",
+      "Nearest to he: she, it, they, there, who, we, hdi, then,\n",
+      "Nearest to only: easily, officially, interlinked, quenched, probable, still, changes, probably,\n",
+      "Nearest to six: eight, seven, nine, four, five, three, two, zero,\n",
+      "Nearest to in: within, during, on, for, from, of, until, through,\n",
+      "Nearest to united: fugitive, aegean, genji, kut, himachal, arctic, kentucky, mosley,\n",
+      "Nearest to called: considered, named, known, referred, used, knitted, nationalized, tachycardia,\n",
+      "Average loss at step 72000: 3.371856\n",
+      "Average loss at step 74000: 3.351158\n",
+      "Average loss at step 76000: 3.310976\n",
+      "Average loss at step 78000: 3.352848\n",
+      "Average loss at step 80000: 3.379728\n",
+      "Nearest to who: he, she, never, they, bello, which, often, moriarty,\n",
+      "Nearest to will: would, can, could, may, should, must, might, cannot,\n",
+      "Nearest to d: b, g, m, sindhu, hubs, l, notated, p,\n",
+      "Nearest to after: before, during, when, despite, while, until, without, from,\n",
+      "Nearest to have: had, has, are, be, having, include, were, refer,\n",
+      "Nearest to american: british, english, german, seuss, french, african, international, association,\n",
+      "Nearest to between: among, within, with, around, fortuitous, from, flea, denarius,\n",
+      "Nearest to use: form, share, because, reach, way, retardation, imre, reflective,\n",
+      "Nearest to at: during, in, tot, releasing, despite, duplicated, bahr, calories,\n",
+      "Nearest to this: which, it, the, he, some, norah, itself, another,\n",
+      "Nearest to he: she, it, they, there, who, we, this, never,\n",
+      "Nearest to only: twisting, weezer, quenched, officially, probably, notre, actually, easily,\n",
+      "Nearest to six: five, seven, four, eight, three, nine, two, zero,\n",
+      "Nearest to in: during, on, within, draped, until, since, at, from,\n",
+      "Nearest to united: fugitive, genji, arctic, aegean, confederation, himachal, kentucky, gerais,\n",
+      "Nearest to called: known, considered, used, referred, named, lleida, knitted, deduction,\n",
+      "Average loss at step 82000: 3.404964\n",
+      "Average loss at step 84000: 3.411332\n",
+      "Average loss at step 86000: 3.388920\n",
+      "Average loss at step 88000: 3.349558\n",
+      "Average loss at step 90000: 3.365286\n",
+      "Nearest to who: he, she, often, they, which, richard, never, angevin,\n",
+      "Nearest to will: would, can, could, may, must, should, might, cannot,\n",
+      "Nearest to d: b, sindhu, m, g, t, notated, l, convolutions,\n",
+      "Nearest to after: before, during, when, while, despite, until, for, without,\n",
+      "Nearest to have: had, has, were, having, are, be, include, contain,\n",
+      "Nearest to american: british, french, english, african, italian, european, japanese, german,\n",
+      "Nearest to between: with, within, around, among, in, fortuitous, flea, denarius,\n",
+      "Nearest to use: share, most, respect, medlineplus, because, development, reflective, epicurean,\n",
+      "Nearest to at: during, in, tot, rump, near, zirconium, gabriel, after,\n",
+      "Nearest to this: which, it, another, some, renunciation, itself, the, he,\n",
+      "Nearest to he: she, it, they, there, who, later, we, but,\n",
+      "Nearest to only: weezer, actually, interlinked, titans, sterling, trusts, thebes, craftsmen,\n",
+      "Nearest to six: eight, seven, four, five, nine, three, zero, two,\n",
+      "Nearest to in: during, within, on, of, under, at, between, and,\n",
+      "Nearest to united: fugitive, genji, arctic, aegean, confederation, rest, himachal, rust,\n",
+      "Nearest to called: considered, known, used, named, referred, nolan, termed, nationalized,\n",
+      "Average loss at step 92000: 3.397223\n",
+      "Average loss at step 94000: 3.254230\n",
+      "Average loss at step 96000: 3.357225\n",
+      "Average loss at step 98000: 3.241184\n",
+      "Average loss at step 100000: 3.356200\n",
+      "Nearest to who: he, she, often, never, which, they, that, richard,\n",
+      "Nearest to will: would, can, could, may, should, must, might, cannot,\n",
+      "Nearest to d: b, quad, sindhu, p, c, genomes, g, lyricists,\n",
+      "Nearest to after: before, during, when, despite, without, while, though, until,\n",
+      "Nearest to have: had, has, are, contain, be, having, include, were,\n",
+      "Nearest to american: british, french, russian, italian, english, canadian, german, japanese,\n",
+      "Nearest to between: with, within, among, around, infested, flea, fortuitous, following,\n",
+      "Nearest to use: share, respect, medlineplus, most, form, retardation, reflective, antithesis,\n",
+      "Nearest to at: during, tines, on, tot, near, decius, in, duplicated,\n",
+      "Nearest to this: which, it, another, itself, some, the, that, what,\n",
+      "Nearest to he: she, it, they, we, there, who, larousse, never,\n",
+      "Nearest to only: interlinked, craftsmen, weezer, quenched, actually, titans, naturally, cornered,\n",
+      "Nearest to six: seven, four, five, eight, nine, three, two, zero,\n",
+      "Nearest to in: during, within, on, among, until, throughout, from, near,\n",
+      "Nearest to united: fugitive, genji, arctic, confederate, aegean, communist, himachal, confederation,\n",
+      "Nearest to called: known, named, considered, referred, termed, used, nationalized, lleida,\n"
+     ]
+    }
+   ],
+   "source": [
+    "num_steps = 100001\n",
+    "\n",
+    "with tf.Session(graph=graph) as session:\n",
+    "  tf.initialize_all_variables().run()\n",
+    "  print('Initialized')\n",
+    "  average_loss = 0\n",
+    "  for step in range(num_steps):\n",
+    "    batch_data, batch_labels = generate_batch_cbow(\n",
+    "      batch_size, num_skips, skip_window)\n",
+    "    feed_dict = {train_dataset : batch_data, train_labels : batch_labels}\n",
+    "    _, l = session.run([optimizer, loss], feed_dict=feed_dict)\n",
+    "    average_loss += l\n",
+    "    if step % 2000 == 0:\n",
+    "      if step > 0:\n",
+    "        average_loss = average_loss / 2000\n",
+    "      # The average loss is an estimate of the loss over the last 2000 batches.\n",
+    "      print('Average loss at step %d: %f' % (step, average_loss))\n",
+    "      average_loss = 0\n",
+    "    # note that this is expensive (~20% slowdown if computed every 500 steps)\n",
+    "    if step % 10000 == 0:\n",
+    "      sim = similarity.eval()\n",
+    "      for i in xrange(valid_size):\n",
+    "        valid_word = reverse_dictionary[valid_examples[i]]\n",
+    "        top_k = 8 # number of nearest neighbors\n",
+    "        nearest = (-sim[i, :]).argsort()[1:top_k+1]\n",
+    "        log = 'Nearest to %s:' % valid_word\n",
+    "        for k in xrange(top_k):\n",
+    "          close_word = reverse_dictionary[nearest[k]]\n",
+    "          log = '%s %s,' % (log, close_word)\n",
+    "        print(log)\n",
+    "  final_embeddings = normalized_embeddings.eval()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 72,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "num_points = 400\n",
+    "\n",
+    "tsne = TSNE(perplexity=30, n_components=2, init='pca', n_iter=5000)\n",
+    "two_d_embeddings = tsne.fit_transform(final_embeddings[1:num_points+1, :])"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 73,
+   "metadata": {
+    "collapsed": true
+   },
+   "outputs": [],
+   "source": [
+    "def plot(embeddings, labels):\n",
+    "  assert embeddings.shape[0] >= len(labels), 'More labels than embeddings'\n",
+    "  pylab.figure(figsize=(15,15))  # in inches\n",
+    "  for i, label in enumerate(labels):\n",
+    "    x, y = embeddings[i,:]\n",
+    "    pylab.scatter(x, y)\n",
+    "    pylab.annotate(label, xy=(x, y), xytext=(5, 2), textcoords='offset points',\n",
+    "                   ha='right', va='bottom')\n",
+    "  pylab.show()\n",
+    "\n",
+    "words = [reverse_dictionary[i] for i in range(1, num_points+1)]\n",
+    "plot(two_d_embeddings, words)"
+   ]
+  }
+ ],
+ "metadata": {
+  "colab": {
+   "default_view": {},
+   "name": "5_word2vec.ipynb",
+   "provenance": [],
+   "version": "0.3.2",
+   "views": {}
+  },
+  "kernelspec": {
+   "display_name": "Python 2",
+   "language": "python",
+   "name": "python2"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 2
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython2",
+   "version": "2.7.6"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 0
+}
